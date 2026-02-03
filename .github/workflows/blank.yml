@@ -1,0 +1,91 @@
+name: Kubuntu-KDE-Completo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kubuntu-setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Instalar Kubuntu Desktop (KDE Plasma)
+        run: |
+          sudo apt update
+          # Instalamos el núcleo de Kubuntu (KDE)
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y kubuntu-desktop-minimal xrdp
+          
+          # Configurar KDE para RDP
+          echo "startplasma-x11" > ~/.xsession
+          sudo adduser xrdp ssl-cert
+          sudo systemctl restart xrdp
+
+      - name: Instalar Servidor FTP
+        run: |
+          sudo apt install -y vsftpd
+          sudo bash -c 'cat > /etc/vsftpd.conf <<EOF
+          listen=YES
+          local_enable=YES
+          write_enable=YES
+          local_umask=022
+          xferlog_enable=YES
+          connect_from_port_20=YES
+          pasv_enable=YES
+          pasv_min_port=40000
+          pasv_max_port=40100
+          EOF'
+          sudo systemctl restart vsftpd
+
+      - name: Instalar Apps (Firefox, Motrix, JDownloader)
+        run: |
+          # Firefox ya viene en Kubuntu, instalamos el resto
+          sudo apt install -y wget curl default-jdk
+          
+          # Motrix
+          MOTRIX_URL=$(curl -s https://api.github.com/repos/agalwood/Motrix/releases/latest | grep "browser_download_url.*deb" | cut -d '"' -f 4 | head -n 1)
+          wget -O motrix.deb "$MOTRIX_URL"
+          sudo apt install -y ./motrix.deb
+          
+          # JDownloader 2
+          wget http://installer.jdownloader.org/JDownloader09theoldgoodone.jar -O JDownloader.jar
+
+      - name: Configurar Usuario y Escritorio
+        run: |
+          # Crear usuario "kubuntu"
+          PASS=$(openssl rand -base64 12)
+          sudo useradd -m -s /bin/bash kubuntu
+          echo "kubuntu:$PASS" | sudo chpasswd
+          sudo usermod -aG sudo kubuntu
+          
+          # Poner JDownloader en el escritorio del usuario
+          sudo mkdir -p /home/kubuntu/Desktop
+          sudo mv JDownloader.jar /home/kubuntu/Desktop/
+          sudo chown -R kubuntu:kubuntu /home/kubuntu/
+          
+          echo "K_USER=kubuntu" >> $GITHUB_ENV
+          echo "K_PASS=$PASS" >> $GITHUB_ENV
+
+      - name: Conectar a Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          # Usar la Auth Key (tskey-auth-...)
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=kubuntu-pc
+          echo "TS_IP=$(tailscale ip -4)" >> $GITHUB_ENV
+
+      - name: Datos de Acceso
+        run: |
+          echo "============================================"
+          echo "SISTEMA KUBUNTU LISTO"
+          echo "IP TAILSCALE: ${{ env.TS_IP }}"
+          echo "USUARIO: ${{ env.K_USER }}"
+          echo "PASSWORD: ${{ env.K_PASS }}"
+          echo "============================================"
+          echo "FTP activo en puerto 21"
+          echo "RDP activo en puerto 3389"
+
+      - name: Mantener Sesión
+        run: |
+          while :; do 
+            echo "Kubuntu corriendo... $(date)"
+            sleep 300
+          done
