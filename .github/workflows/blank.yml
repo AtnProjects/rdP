@@ -1,4 +1,4 @@
-name: Seedbox-Pro-Cloud
+name: Seedbox-Pro-No-Firefox
 
 on:
   workflow_dispatch:
@@ -9,39 +9,35 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: 1. Instalación de Infraestructura (KDE/XFCE + RDP)
+      - name: 1. Infraestructura Gráfica Ligera (XFCE + RDP)
         run: |
           sudo apt-get update
-          # Instalamos XFCE (ligero), XRDP y herramientas de sistema
+          # Instalamos solo lo necesario para el escritorio y RDP
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             xfce4 xfce4-terminal xrdp dbus-x11 x11-xserver-utils \
-            firefox-browser vsftpd wget curl
+            vsftpd wget curl
           
           # Fix para permitir ejecución del servidor X
           sudo sed -i 's/allowed_users=console/allowed_users=anybody/' /etc/X11/Xwrapper.config
 
-      - name: 2. Instalación de Herramientas "Pro" (Seedbox Tools)
+      - name: 2. Herramientas de Descarga (qBittorrent + Motrix)
         run: |
-          # qBittorrent (El estándar para Seedboxes)
+          # qBittorrent para Torrents
           sudo apt-get install -y qbittorrent
           
-          # Motrix (Descargas directas y aceleradas)
+          # Motrix para descargas directas (HTTP/FTP/Magnet)
           MOTRIX_URL=$(curl -s https://api.github.com/repos/agalwood/Motrix/releases/latest | grep "browser_download_url.*deb" | cut -d '"' -f 4 | head -n 1)
           wget -q -O motrix.deb "$MOTRIX_URL"
           sudo apt install -y ./motrix.deb
 
-      - name: 3. Configuración de Usuario y Sesión
+      - name: 3. Configuración de Usuario y Sesión RDP
         run: |
           # Crear usuario maestro
           sudo useradd -m -s /bin/bash seeduser
           echo "seeduser:seedbox2024" | sudo chpasswd
           sudo usermod -aG sudo seeduser
 
-          # Crear carpetas de descargas compartidas
-          sudo mkdir -p /home/seeduser/Downloads
-          sudo chown -R seeduser:seeduser /home/seeduser/Downloads
-
-          # Configurar inicio de sesión (Fix sesión failsafe)
+          # Configurar inicio de sesión XFCE (Fix sesión failsafe)
           sudo bash -c 'cat > /home/seeduser/.xsession <<EOF
           export XDG_SESSION_TYPE=x11
           export XDG_CURRENT_DESKTOP=XFCE
@@ -50,7 +46,7 @@ jobs:
           sudo chown seeduser:seeduser /home/seeduser/.xsession
           sudo systemctl restart xrdp
 
-      - name: 4. Configuración Servidor FTP
+      - name: 4. Servidor FTP (Salida de Archivos)
         run: |
           sudo bash -c 'cat > /etc/vsftpd.conf <<EOF
           listen=YES
@@ -68,29 +64,29 @@ jobs:
           EOF'
           sudo systemctl restart vsftpd
 
-      - name: 5. Conexión Tailscale (Mesh VPN)
+      - name: 5. Conexión VPN Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
-          # RECUERDA: Secret TAILSCALE_AUTH_KEY debe empezar por tskey-auth-...
+          # RECUERDA: Configurar TAILSCALE_AUTH_KEY en los Secrets (tskey-auth-...)
           sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=seedbox-pro
           echo "TS_IP=$(tailscale ip -4)" >> $GITHUB_ENV
 
-      - name: 6. Información de Acceso Pro
+      - name: 6. Información de Acceso
         run: |
           echo "===================================================="
-          echo "🚀 SEEDBOX CLOUD PRO ESTÁ EN LINEA"
+          echo "🚀 SEEDBOX PRO (SIN NAVEGADOR) LISTA"
           echo "===================================================="
           echo "IP TAILSCALE: ${{ env.TS_IP }}"
           echo "USUARIO: seeduser"
           echo "PASSWORD: seedbox2024"
           echo "===================================================="
-          echo "ACCESO RDP: Conéctate con la IP y las credenciales"
-          echo "ACCESO FTP: Puerto 21 (Carpeta /home/seeduser/Downloads)"
+          echo "RDP: Acceso visual a qBittorrent y Motrix"
+          echo "FTP: Puerto 21 para descargar a tu PC"
           echo "===================================================="
 
-      - name: 7. Mantener Activo (6 Horas Máximo)
+      - name: 7. Ejecución Continua
         run: |
           while :; do 
-            echo "Seedbox activa... $(date)"
+            echo "Seedbox activa y descargando... $(date)"
             sleep 300
           done
