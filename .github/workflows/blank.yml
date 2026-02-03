@@ -1,4 +1,4 @@
-name: RDP Windows + Nginx Turbo (Fixed)
+name: RDP Windows + Nginx Turbo (D-Drive)
 
 on:
   workflow_dispatch:
@@ -15,8 +15,11 @@ jobs:
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 0
         netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-        netsh advfirewall firewall add rule name="Nginx-Turbo" dir=in action=allow protocol=TCP localport=80
-        # Optimización TCP
+        
+        # Abrimos puerto 8000 para Nginx
+        netsh advfirewall firewall add rule name="Nginx-Turbo" dir=in action=allow protocol=TCP localport=8000
+        
+        # Optimización TCP para descargas pesadas
         netsh int tcp set global autotuninglevel=normal
         netsh int tcp set global congestionprovider=ctcp
 
@@ -24,15 +27,9 @@ jobs:
     - name: Install Tools
       run: choco install 7zip aria2 python nginx tailscale -y --no-progress
 
-    # 3. Crear usuario (rootkit) con FIX de complejidad
+    # 3. Crear usuario (rootkit)
     - name: Create User
       run: |
-        # Desactivar politica de contraseñas complejas para aceptar "buzon2005"
-        secedit /export /cfg config.cfg
-        (Get-Content config.cfg) -replace 'PasswordComplexity = 1', 'PasswordComplexity = 0' | Set-Content config.cfg
-        secedit /configure /db $env:windir\security\local.sdb /cfg config.cfg /areas SECURITYPOLICY
-        
-        # Crear usuario
         $p = "buzon2005" | ConvertTo-SecureString -AsPlainText -Force
         New-LocalUser rootkit -Password $p -AccountNeverExpires
         Add-LocalGroupMember Administrators rootkit
@@ -45,65 +42,68 @@ jobs:
         $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
         echo "TSIP=$ip" >> $env:GITHUB_ENV
 
-    # 5. Preparar Carpeta en Disco D:
+    # 5. Preparar Carpeta en Disco D: (Temporary Storage)
     - name: Prepare D-Drive Folder
       run: |
         New-Item -ItemType Directory -Force -Path D:\Uploads
-        # Permisos totales para rootkit
         icacls "D:\Uploads" /grant "rootkit:(OI)(CI)F"
 
-    # 6. Configurar Nginx Turbo (CORREGIDO)
+    # 6. Configurar Nginx Turbo (CORREGIDO: uso de $$uri)
     - name: Setup Nginx Turbo
       run: |
         $nginxPath = "C:\tools\nginx"
         if (!(Test-Path $nginxPath)) { $nginxPath = (Get-ChildItem -Path C:\tools\nginx-* | Select-Object -First 1).FullName }
-        
-        # Aquí estaba el error. La indentación debe mantenerse.
+
         $conf = @"
         worker_processes 1;
         events { 
             worker_connections 2048; 
         }
+
         http {
             include       mime.types;
             default_type  application/octet-stream;
+            
             sendfile        on;
             tcp_nopush      on;
             tcp_nodelay     on;
             sendfile_max_chunk 2m;
+            
             output_buffers 1 64k;
             client_body_buffer_size 512k;
             client_max_body_size 0;
             gzip off;
+
             server {
-                listen       80;
+                listen       8000; # Puerto 8000
                 server_name  localhost;
+
                 location / {
                     root   D:/Uploads;
                     autoindex on;
                     autoindex_exact_size off;
                     autoindex_localtime on;
-                    try_files `$uri `$uri/ =404;
+                    # FIX: Uso de $$uri para escapar el signo de dólar
+                    try_files $$uri $$uri/ =404;
                 }
             }
         }
-        "@
-        # El "@" de arriba debe estar alineado con el comando $conf, no pegado a la izquierda.
-
+"@
         $conf | Out-File "$nginxPath\conf\nginx.conf" -Encoding ASCII
         
+        # Iniciar Nginx
         cd $nginxPath
         Start-Process .\nginx.exe
 
     # 7. Info Final
-    - name: Final Info
+    - name: Final Info (Check line 88 here)
       run: |
         Write-Host "=============================================="
         Write-Host "ACCESO RDP:"
-        Write-Host "IP: $env:TSIP | Usuario: rootkit | Pass: buzon2005"
+        Write-Host "xfreerdp3 /v:$env:TSIP /u:rootkit /p:buzon2005 /gfx /dynamic-resolution"
         Write-Host ""
         Write-Host "TURBO SERVER (DISCO D):"
-        Write-Host "URL: http://$env:TSIP"
+        Write-Host "URL Motrix: http://$env:TSIP:8000/NOMBRE_ARCHIVO"
         Write-Host "Carpeta en RDP: D:\Uploads"
         Write-Host "=============================================="
         while ($true) { Start-Sleep 300 }
