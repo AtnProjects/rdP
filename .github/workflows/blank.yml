@@ -1,89 +1,44 @@
-name: RDP Windows + Nginx Basic (D-Drive)
-
-on:
-  workflow_dispatch:
-
 jobs:
-  rdp-session:
+  server:
     runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
-    # 1. Configuración de Red, RDP y Firewall
-    - name: Configure System and Firewall
+    - name: Install Chocolatey (si no existe)
+      shell: pwsh
       run: |
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 0
-        netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-        netsh advfirewall firewall add rule name="Nginx-HTTP" dir=in action=allow protocol=TCP localport=8000
+        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = 3072
+          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        }
 
-    # 2. Instalar herramientas
-    - name: Install Tools
-      run: choco install 7zip aria2 python nginx tailscale -y --no-progress
-
-    # 3. Crear usuario (rootkit)
-    - name: Create User
+    - name: Install Nginx and 7-Zip via Chocolatey
+      shell: pwsh
       run: |
-        $p = "buzon2005" | ConvertTo-SecureString -AsPlainText -Force
-        New-LocalUser rootkit -Password $p -AccountNeverExpires
-        Add-LocalGroupMember Administrators rootkit
-        Add-LocalGroupMember "Remote Desktop Users" rootkit
+        choco install nginx 7zip -y --no-progress
 
-    # 4. Conectar Tailscale
-    - name: Tailscale Connect
-      run: |
-        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
-        $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-        echo "TSIP=$ip" >> $env:GITHUB_ENV
-
-    # 5. Preparar Carpeta en Disco D:
-    - name: Prepare D-Drive Folder
-      run: |
-        New-Item -ItemType Directory -Force -Path D:\Uploads
-        icacls "D:\Uploads" /grant "rootkit:(OI)(CI)F"
-
-    # 6. Configurar Nginx (BÁSICO)
-    - name: Setup Nginx Basic
+    - name: Configure and Start Nginx
+      shell: pwsh
       run: |
         $nginxPath = "C:\tools\nginx"
-        
-        $conf = @"
-        worker_processes auto;
-        events { 
-            worker_connections 1024; 
+        $conf | Out-File "$nginxPath\conf\nginx.conf" -Encoding ascii
+        Set-Location $nginxPath
+
+        if (-not (Get-Process nginx -ErrorAction SilentlyContinue)) {
+          Start-Process ".\nginx.exe"
         }
 
-        http {
-            include       mime.types;
-            default_type  application/octet-stream;
-            
-            server {
-                listen       8000;
-                server_name  localhost;
-
-                location / {
-                    root   D:/Uploads;
-                    autoindex on;
-                }
-            }
-        }
-"@
-        $conf | Out-File "$nginxPath\conf\nginx.conf" -Encoding ASCII
-        
-        # Iniciar Nginx
-        cd $nginxPath
-        Start-Process .\nginx.exe
-
-    # 7. Info Final y Mantenimiento
     - name: Final Info and Keep Alive
+      shell: pwsh
       run: |
         Write-Host "=============================================="
         Write-Host "ACCESO RDP:"
         Write-Host "xfreerdp3 /v:$env:TSIP /u:rootkit /p:buzon2005 /gfx /dynamic-resolution"
         Write-Host ""
-        Write-Host "SERVER (BÁSICO):"
+        Write-Host "SERVER:"
         Write-Host "URL: http://$env:TSIP:8000/NOMBRE_ARCHIVO"
-        Write-Host "Carpeta en RDP: D:\Uploads"
+        Write-Host "Carpeta RDP: D:\Uploads"
         Write-Host "=============================================="
-        # Mantiene el runner vivo por 6 horas
-        while ($true) { Start-Sleep 300 }
+
+        Start-Sleep -Seconds 21600
