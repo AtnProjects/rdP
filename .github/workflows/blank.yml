@@ -1,0 +1,61 @@
+name: RDP-Anti-BlackScreen
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Instalación y Fix de Pantalla Negra
+        run: |
+          sudo apt-get update
+          # Instalamos XFCE y XRDP (XFCE es el que menos falla con RDP)
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            xfce4 xfce4-terminal xrdp firefox vsftpd wget curl
+          
+          # FIX: Permitir que cualquier usuario inicie el servidor X
+          sudo sed -i 's/allowed_users=console/allowed_users=anybody/' /etc/X11/Xwrapper.config
+          
+          # Crear usuario RDP antes de configurar su sesión
+          sudo useradd -m -s /bin/bash rdpuser
+          echo "rdpuser:rdpuser123" | sudo chpasswd
+          sudo usermod -aG sudo rdpuser
+
+          # Configurar la sesión específicamente para el usuario rdpuser
+          echo "startxfce4" | sudo tee /home/rdpuser/.xsession
+          sudo chown rdpuser:rdpuser /home/rdpuser/.xsession
+
+          sudo systemctl restart xrdp
+
+      - name: Configurar FTP y Motrix
+        run: |
+          # FTP rápido
+          echo "local_enable=YES" | sudo tee -a /etc/vsftpd.conf
+          echo "write_enable=YES" | sudo tee -a /etc/vsftpd.conf
+          sudo systemctl restart vsftpd
+
+          # Motrix
+          MOTRIX_URL=$(curl -s https://api.github.com/repos/agalwood/Motrix/releases/latest | grep "browser_download_url.*deb" | cut -d '"' -f 4 | head -n 1)
+          wget -q -O motrix.deb "$MOTRIX_URL"
+          sudo apt install -y ./motrix.deb
+
+      - name: Conectar Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=rdp-fix
+          echo "IP_TS=$(tailscale ip -4)" >> $GITHUB_ENV
+
+      - name: Datos de Acceso
+        run: |
+          echo "============================================"
+          echo "IP TAILSCALE: ${{ env.IP_TS }}"
+          echo "USUARIO: rdpuser"
+          echo "PASSWORD: rdpuser123"
+          echo "============================================"
+
+      - name: Keep-Alive
+        run: |
+          while :; do sleep 300; done
