@@ -9,13 +9,14 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    # 1. Configuración de Red y RDP
-    - name: Configure System
+    # 1. Configuración de Red, RDP y Firewall
+    - name: Configure System and Firewall
       run: |
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 0
         netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
         netsh advfirewall firewall add rule name="Nginx-Turbo" dir=in action=allow protocol=TCP localport=8000
+        # Optimización TCP
         netsh int tcp set global autotuninglevel=normal
         netsh int tcp set global congestionprovider=ctcp
 
@@ -38,16 +39,16 @@ jobs:
         $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
         echo "TSIP=$ip" >> $env:GITHUB_ENV
 
-    # 5. Preparar Carpeta en Disco D: (Temporary Storage)
+    # 5. Preparar Carpeta en Disco D:
     - name: Prepare D-Drive Folder
       run: |
         New-Item -ItemType Directory -Force -Path D:\Uploads
         icacls "D:\Uploads" /grant "rootkit:(OI)(CI)F"
 
-    # 6. Configurar Nginx Turbo
+    # 6. Configurar Nginx Turbo (Máxima Robustez de YAML)
     - name: Setup Nginx Turbo
       run: |
-        $nginxPath = "C:\tools\nginx" # Asumimos ruta de choco, más simple.
+        $nginxPath = "C:\tools\nginx"
         
         $conf = @"
         worker_processes 1;
@@ -78,6 +79,7 @@ jobs:
                     autoindex on;
                     autoindex_exact_size off;
                     autoindex_localtime on;
+                    # $$uri escapa el $ para PowerShell
                     try_files $$uri $$uri/ =404;
                 }
             }
@@ -85,11 +87,12 @@ jobs:
 "@
         $conf | Out-File "$nginxPath\conf\nginx.conf" -Encoding ASCII
         
+        # Iniciar Nginx
         cd $nginxPath
         Start-Process .\nginx.exe
 
-    # 7. Info Final
-    - name: Final Info
+    # 7. Info Final y Mantenimiento
+    - name: Final Info and Keep Alive
       run: |
         Write-Host "=============================================="
         Write-Host "ACCESO RDP:"
@@ -99,4 +102,5 @@ jobs:
         Write-Host "URL Motrix: http://$env:TSIP:8000/NOMBRE_ARCHIVO"
         Write-Host "Carpeta en RDP: D:\Uploads"
         Write-Host "=============================================="
+        # Mantiene el runner vivo por 6 horas
         while ($true) { Start-Sleep 300 }
