@@ -1,0 +1,158 @@
+name: RDP + FTP + Motrix & qBittorrent
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp-server:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          # Habilitar RDP
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+
+          # Reglas Firewall RDP
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          
+          Restart-Service -Name TermService -Force
+
+      # ---------------------------------------------------------
+      # INSTALACIÓN DE APPS: qBittorrent + Motrix
+      # ---------------------------------------------------------
+      - name: Install Apps (qBittorrent, Motrix, Tools)
+        run: |
+          Write-Host "Installing Basic Tools (Chrome, 7Zip)..."
+          choco install googlechrome -y --no-progress
+          choco install 7zip -y --no-progress
+          
+          Write-Host "Installing qBittorrent..."
+          choco install qbittorrent -y --no-progress
+          
+          Write-Host "Downloading Motrix 1.8.19..."
+          $motrixUrl = "https://dl.motrix.app/release/Motrix-1.8.19-x64.exe"
+          $installerPath = "$env:TEMP\MotrixSetup.exe"
+          Invoke-WebRequest -Uri $motrixUrl -OutFile $installerPath
+          
+          Write-Host "Installing Motrix..."
+          # /S es el comando estándar para instalación silenciosa en este tipo de instaladores
+          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
+          
+          Remove-Item $installerPath -Force
+          Write-Host "All Applications Installed Successfully."
+
+      # ---------------------------------------------------------
+      # CREACIÓN DE USUARIOS (RDP y FTP)
+      # ---------------------------------------------------------
+      - name: Create RDP & FTP Users
+        run: |
+          Add-Type -AssemblyName System.Security
+          function Generate-Password {
+              $charSet = @{ Upper = [char[]](65..90); Lower = [char[]](97..122); Number = [char[]](48..57) }
+              $raw = @()
+              $raw += $charSet.Upper | Get-Random -Count 3
+              $raw += $charSet.Lower | Get-Random -Count 3
+              $raw += $charSet.Number | Get-Random -Count 3
+              return -join ($raw | Sort-Object { Get-Random })
+          }
+
+          # 1. Usuario RDP (Admin)
+          $rdpPass = Generate-Password
+          $secureRdp = ConvertTo-SecureString $rdpPass -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $secureRdp -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
+          # 2. Usuario FTP (Limitado)
+          $ftpPass = Generate-Password
+          $secureFtp = ConvertTo-SecureString $ftpPass -AsPlainText -Force
+          New-LocalUser -Name "FTPUser" -Password $secureFtp -AccountNeverExpires
+          
+          echo "RDP_PASS=$rdpPass" >> $env:GITHUB_ENV
+          echo "FTP_PASS=$ftpPass" >> $env:GITHUB_ENV
+
+      # ---------------------------------------------------------
+      # SERVIDOR FTP
+      # ---------------------------------------------------------
+      - name: Setup IIS FTP Server
+        run: |
+          Install-WindowsFeature Web-FTP-Server, Web-FTP-Service, Web-FTP-Ext
+          
+          $ftpPath = "C:\ftp_root"
+          New-Item -Path $ftpPath -ItemType Directory -Force
+          
+          # Permisos para FTPUser
+          $acl = Get-Acl $ftpPath
+          $permission = "FTPUser","FullControl","ContainerInherit,ObjectInherit","None","Allow"
+          $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule $permission
+          $acl.SetAccessRule($accessRule)
+          Set-Acl $ftpPath $acl
+
+          Import-Module WebAdministration
+          Remove-WebSite -Name "Default Web Site" -ErrorAction SilentlyContinue
+
+          # Sitio FTP en puerto 21
+          New-WebFtpSite -Name "MyFTPSite" -Port 21 -PhysicalPath $ftpPath -Force
+          
+          # Configuración básica (sin SSL estricto para facilidad)
+          Set-ItemProperty "IIS:\Sites\MyFTPSite" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
+          Set-ItemProperty "IIS:\Sites\MyFTPSite" -Name ftpServer.security.ssl.controlChannelPolicy -Value "SslAllow"
+          Set-ItemProperty "IIS:\Sites\MyFTPSite" -Name ftpServer.security.ssl.dataChannelPolicy -Value "SslAllow"
+          
+          Add-WebConfiguration -Filter /system.ftpServer/security/authorization -Value @{accessType="Allow"; users="FTPUser"; permissions="Read,Write"} -PSPath IIS:\ -Location "MyFTPSite"
+          
+          # Abrir Puerto 21
+          netsh advfirewall firewall add rule name="FTP-Port-21" dir=in action=allow protocol=TCP localport=21
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          if (-not $tsIP) { Write-Error "Tailscale IP missing"; exit 1 }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n============================================="
+          Write-Host "           SYSTEM READY"
+          Write-Host "============================================="
+          Write-Host "IP Address:   $env:TAILSCALE_IP"
+          Write-Host "---------------------------------------------"
+          Write-Host "RDP User:     RDP"
+          Write-Host "RDP Password: $env:RDP_PASS"
+          Write-Host "---------------------------------------------"
+          Write-Host "FTP User:     FTPUser"
+          Write-Host "FTP Password: $env:FTP_PASS"
+          Write-Host "FTP Host:     $env:TAILSCALE_IP (Port 21)"
+          Write-Host "---------------------------------------------"
+          Write-Host "INSTALLED APPS:"
+          Write-Host "1. Motrix (v1.8.19)"
+          Write-Host "2. qBittorrent"
+          Write-Host "3. Google Chrome"
+          Write-Host "4. 7-Zip"
+          Write-Host "=============================================`n"
+          
+          while ($true) {
+              Write-Host "[$(Get-Date)] Server Active - Press Cancel in GitHub to stop."
+              Start-Sleep -Seconds 300
+          }
