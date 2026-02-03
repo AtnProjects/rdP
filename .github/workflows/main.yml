@@ -1,113 +1,95 @@
-name: RDP
+name: Ubuntu-GNOME-RDP-FTP
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
-    runs-on: windows-latest
+  build:
+    runs-on: ubuntu-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Instalar GNOME y RDP
         run: |
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
+          sudo apt update
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y ubuntu-desktop-minimal xrdp dbus-x11
+          # Configurar sesión GNOME para RDP
+          echo "export GNOME_SHELL_SESSION_MODE=ubuntu" > ~/.xsessionrc
+          echo "export XDG_CURRENT_DESKTOP=Ubuntu:GNOME" >> ~/.xsessionrc
+          echo "export XDG_CONFIG_DIRS=/etc/xdg/xdg-ubuntu:/etc/xdg" >> ~/.xsessionrc
+          echo "exec /usr/bin/gnome-session" >> ~/.xsessionrc
+          sudo adduser xrdp ssl-cert
+          sudo systemctl restart xrdp
 
-          # Remove any existing rule with the same name to avoid duplication
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          
-          # For testing, allow any incoming connection on port 3389
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
-
-          # (Optional) Restart the Remote Desktop service to ensure changes take effect
-          Restart-Service -Name TermService -Force
-
-      - name: Create RDP User with Secure Password
+      - name: Instalar y Configurar Servidor FTP
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)      # A-Z
-              Lower   = [char[]](97..122)     # a-z
-              Number  = [char[]](48..57)      # 0-9
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126)) # Special characters
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          sudo apt install -y vsftpd
+          # Crear backup de la config original
+          sudo cp /etc/vsftpd.conf /etc/vsftpd.conf.bak
           
-          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "RDP")) {
-              Write-Error "User creation failed"
-              exit 1
-          }
+          # Configuración optimizada para permitir escritura y modo pasivo
+          sudo bash -c 'cat > /etc/vsftpd.conf <<EOF
+          listen=YES
+          listen_ipv6=NO
+          anonymous_enable=NO
+          local_enable=YES
+          write_enable=YES
+          local_umask=022
+          dirmessage_enable=YES
+          use_localtime=YES
+          xferlog_enable=YES
+          connect_from_port_20=YES
+          chroot_local_user=NO
+          secure_chroot_dir=/var/run/vsftpd/empty
+          pam_service_name=vsftpd
+          pasv_enable=YES
+          pasv_min_port=40000
+          pasv_max_port=40100
+          EOF'
+          sudo systemctl restart vsftpd
 
-      - name: Install Tailscale
+      - name: Instalar Firefox, Motrix y JDownloader
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          sudo apt install -y firefox wget curl default-jdk
+          # Motrix
+          MOTRIX_URL=$(curl -s https://api.github.com/repos/agalwood/Motrix/releases/latest | grep "browser_download_url.*deb" | cut -d '"' -f 4 | head -n 1)
+          wget -O motrix.deb $MOTRIX_URL
+          sudo apt install -y ./motrix.deb
+          # JDownloader 2
+          wget http://installer.jdownloader.org/JDownloader09theoldgoodone.jar -O /home/runner/JDownloader.jar
 
-      - name: Establish Tailscale Connection
+      - name: Crear Usuario de Acceso
         run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          # Generar contraseña aleatoria
+          PASSWORD=$(openssl rand -base64 12)
+          sudo useradd -m -s /bin/bash rdpuser
+          echo "rdpuser:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo rdpuser
+          # Dar permisos al jar de JDownloader para el nuevo usuario
+          sudo mv /home/runner/JDownloader.jar /home/rdpuser/
+          sudo chown rdpuser:rdpuser /home/rdpuser/JDownloader.jar
           
-          # Wait for Tailscale to assign an IP
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-          
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-      
-      - name: Verify RDP Accessibility
-        run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          
-          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
+          echo "RDP_USER=rdpuser" >> $GITHUB_ENV
+          echo "RDP_PASS=$PASSWORD" >> $GITHUB_ENV
 
-      - name: Maintain Connection
+      - name: Conectar Tailscale
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
-          Write-Host "==================`n"
-          
-          # Keep runner active indefinitely (or until manually cancelled)
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
-          }
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ubuntu-gnome-srv
+          echo "TAILSCALE_IP=$(tailscale ip -4)" >> $GITHUB_ENV
+
+      - name: Credenciales de Acceso
+        run: |
+          echo "========================================================="
+          echo "ACCESO RDP Y FTP"
+          echo "IP TAILSCALE: ${{ env.TAILSCALE_IP }}"
+          echo "USUARIO: ${{ env.RDP_USER }}"
+          echo "PASSWORD: ${{ env.RDP_PASS }}"
+          echo "========================================================="
+          echo "FTP: Conectar usando puerto 21 (Modo Pasivo)"
+          echo "RDP: Conectar usando puerto 3389"
+          echo "========================================================="
+
+      - name: Mantener activo
+        run: |
+          while :; do echo "Keep-alive: $(date)"; sleep 300; done
