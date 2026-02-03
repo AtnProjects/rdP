@@ -1,0 +1,61 @@
+name: RDP-Fast-No-JDownloader
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Instalación Express (IceWM + RDP + FTP + Firefox)
+        run: |
+          sudo apt-get update
+          # Instalación sin recomendados para máxima velocidad
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            icewm xrdp xterm firefox vsftpd wget curl
+          
+          # Configurar sesión y RDP
+          echo "exec icewm-session" > ~/.xsession
+          sudo adduser xrdp ssl-cert
+          sudo systemctl restart xrdp
+
+      - name: Configurar FTP y Usuario
+        run: |
+          # FTP: Permitir escritura
+          echo "local_enable=YES" | sudo tee -a /etc/vsftpd.conf
+          echo "write_enable=YES" | sudo tee -a /etc/vsftpd.conf
+          echo "pasv_min_port=40000" | sudo tee -a /etc/vsftpd.conf
+          echo "pasv_max_port=40100" | sudo tee -a /etc/vsftpd.conf
+          sudo systemctl restart vsftpd
+
+          # Usuario RDP/FTP
+          sudo useradd -m -s /bin/bash rdpuser
+          echo "rdpuser:rdpuser123" | sudo chpasswd
+          sudo usermod -aG sudo rdpuser
+
+      - name: Instalar Motrix (Descargador)
+        run: |
+          MOTRIX_URL=$(curl -s https://api.github.com/repos/agalwood/Motrix/releases/latest | grep "browser_download_url.*deb" | cut -d '"' -f 4 | head -n 1)
+          wget -q -O motrix.deb "$MOTRIX_URL"
+          sudo apt install -y ./motrix.deb
+
+      - name: Conectar Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=fast-rdp
+          echo "IP_TS=$(tailscale ip -4)" >> $GITHUB_ENV
+
+      - name: Acceso
+        run: |
+          echo "============================================"
+          echo "SISTEMA TURBO CARGADO (SIN JDOWNLOADER)"
+          echo "IP TAILSCALE: ${{ env.IP_TS }}"
+          echo "USUARIO: rdpuser"
+          echo "PASSWORD: rdpuser123"
+          echo "============================================"
+
+      - name: Keep-Alive
+        run: |
+          while :; do sleep 300; done
