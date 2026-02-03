@@ -1,4 +1,4 @@
-name: RDP Windows + Nginx Turbo (C-Drive Persistente)
+name: RDP Windows + Nginx Basic (D-Drive)
 
 on:
   workflow_dispatch:
@@ -9,125 +9,81 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    # 1. Configuración RDP y Firewall
-    - name: Configure RDP and Firewall
-      shell: powershell
+    # 1. Configuración de Red, RDP y Firewall
+    - name: Configure System and Firewall
       run: |
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 0
         netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-        netsh advfirewall firewall add rule name="Nginx-Turbo" dir=in action=allow protocol=TCP localport=8000
-        netsh int tcp set global autotuninglevel=normal
-        netsh int tcp set global congestionprovider=ctcp
-        Write-Host "RDP y Firewall configurados."
+        netsh advfirewall firewall add rule name="Nginx-HTTP" dir=in action=allow protocol=TCP localport=8000
 
-    # 2. Instalar herramientas via Choco
+    # 2. Instalar herramientas
     - name: Install Tools
-      shell: powershell
-      run: |
-        choco install 7zip aria2 python nginx tailscale -y --no-progress --force
-        Write-Host "Herramientas instaladas."
+      run: choco install 7zip aria2 python nginx tailscale -y --no-progress
 
-    # 3. Crear usuario rootkit
-    - name: Create User rootkit
-      shell: powershell
+    # 3. Crear usuario (rootkit)
+    - name: Create User
       run: |
         $p = "buzon2005" | ConvertTo-SecureString -AsPlainText -Force
-        if (-not (Get-LocalUser -Name "rootkit" -ErrorAction SilentlyContinue)) {
-          New-LocalUser rootkit -Password $p -AccountNeverExpires
-        }
+        New-LocalUser rootkit -Password $p -AccountNeverExpires
         Add-LocalGroupMember Administrators rootkit
         Add-LocalGroupMember "Remote Desktop Users" rootkit
-        Write-Host "Usuario rootkit creado/agregado."
 
-    # 4. Tailscale (requiere secret TAILSCALE_AUTH_KEY)
+    # 4. Conectar Tailscale
     - name: Tailscale Connect
-      shell: powershell
       run: |
-        $tsPath = "${env:ProgramFiles}\Tailscale\tailscale.exe"
-        if (Test-Path $tsPath) {
-          & $tsPath up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --accept-routes --accept-dns=false
-          $ip = & $tsPath ip -4
-          echo "TSIP=$ip" >> $env:GITHUB_ENV
-          Write-Host "Tailscale IP: $ip"
-        } else {
-          Write-Error "Tailscale no encontrado."
-        }
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
+        $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+        echo "TSIP=$ip" >> $env:GITHUB_ENV
 
-    # 5. Preparar carpeta uploads en C: (persistente en runner)
-    - name: Prepare Uploads Folder
-      shell: powershell
+    # 5. Preparar Carpeta en Disco D:
+    - name: Prepare D-Drive Folder
       run: |
-        $uploadPath = "C:\uploads"
-        New-Item -ItemType Directory -Force -Path $uploadPath
-        icacls "$uploadPath" /grant "rootkit:(OI)(CI)F" /T
-        Write-Host "Carpeta: $uploadPath"
+        New-Item -ItemType Directory -Force -Path D:\Uploads
+        icacls "D:\Uploads" /grant "rootkit:(OI)(CI)F"
 
-    # 6. Nginx Turbo (detecta path real de Choco)
-    - name: Setup Nginx Turbo
-      shell: powershell
+    # 6. Configurar Nginx (BÁSICO)
+    - name: Setup Nginx Basic
       run: |
-        # Detectar path Nginx (Choco: C:\tools\nginx-*)
-        $nginxPath = Get-ChildItem "C:\tools\nginx-*" -Directory | Select-Object -Last 1 -ExpandProperty FullName
-        if (-not $nginxPath) { Write-Error "Nginx no encontrado"; exit 1 }
-        Write-Host "Nginx en: $nginxPath"
+        $nginxPath = "C:\tools\nginx"
         
-        $confPath = "$nginxPath\conf"
-        New-Item -ItemType Directory -Force -Path $confPath
-
-        @"
-worker_processes 1;
-events {
-    worker_connections 2048;
-}
-
-http {
-    include       mime.types;
-    default_type  application/octet-stream;
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    sendfile_max_chunk 2m;
-    output_buffers 1 64k;
-    client_body_buffer_size 512k;
-    client_max_body_size 0;
-    gzip off;
-
-    server {
-        listen 8000;
-        server_name localhost;
-        location / {
-            root C:/uploads;
-            autoindex on;
-            autoindex_exact_size off;
-            autoindex_localtime on;
-            try_files $uri $uri/ =404;
+        $conf = @"
+        worker_processes auto;
+        events { 
+            worker_connections 1024; 
         }
-    }
-}
-"@ | Out-File "$confPath\nginx.conf" -Encoding ASCII
 
-        # Test config y start background
+        http {
+            include       mime.types;
+            default_type  application/octet-stream;
+            
+            server {
+                listen       8000;
+                server_name  localhost;
+
+                location / {
+                    root   D:/Uploads;
+                    autoindex on;
+                }
+            }
+        }
+"@
+        $conf | Out-File "$nginxPath\conf\nginx.conf" -Encoding ASCII
+        
+        # Iniciar Nginx
         cd $nginxPath
-        .\nginx.exe -t
-        if ($LASTEXITCODE -eq 0) {
-          Start-Process .\nginx.exe -WindowStyle Hidden
-          Write-Host "Nginx iniciado en puerto 8000."
-        } else {
-          Write-Error "Error en config Nginx."
-        }
-        echo "NGINX_PATH=$nginxPath" >> $env:GITHUB_ENV
+        Start-Process .\nginx.exe
 
-    # 7. Info y Keep-Alive (6h)
+    # 7. Info Final y Mantenimiento
     - name: Final Info and Keep Alive
-      shell: powershell
       run: |
         Write-Host "=============================================="
-        Write-Host "RDP: xfreerdp /v:$env:TSIP /u:rootkit /p:buzon2005 /size:90%% /gfx /dynamic-resolution +clipboard"
-        Write-Host "Nginx: http://$env:TSIP:8000/"
-        Write-Host "Uploads: C:\uploads (autoindex)"
-        Write-Host "Nginx logs: $env:NGINX_PATH\logs\"
+        Write-Host "ACCESO RDP:"
+        Write-Host "xfreerdp3 /v:$env:TSIP /u:rootkit /p:buzon2005 /gfx /dynamic-resolution"
+        Write-Host ""
+        Write-Host "SERVER (BÁSICO):"
+        Write-Host "URL: http://$env:TSIP:8000/NOMBRE_ARCHIVO"
+        Write-Host "Carpeta en RDP: D:\Uploads"
         Write-Host "=============================================="
-        Start-Sleep 10  # Espera breve para logs
-        # Keep alive
-        for ($i=0; $i -lt 72; $i++) { Write-Host "Alive... ($i/72)"; Start-Sleep 300 }
+        # Mantiene el runner vivo por 6 horas
+        while ($true) { Start-Sleep 300 }
