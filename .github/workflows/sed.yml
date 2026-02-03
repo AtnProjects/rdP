@@ -20,24 +20,26 @@ jobs:
             xfce4 xfce4-terminal xrdp xorgxrdp dbus-x11 x11-xserver-utils \
             wget curl vsftpd
 
-          # Configurar sesión XFCE para RDP (inspirado en XRDP-for-ubuntu)
-          echo xfce4-session | sudo tee /home/runner/.xsession >/dev/null
-          echo 'Xcursor.core: 1' | sudo tee /home/runner/.Xresources >/dev/null
+          # Configurar sesión XFCE para RDP
+          echo "xfce4-session" | sudo tee /home/runner/.xsession >/dev/null
+          echo "Xcursor.core: 1" | sudo tee /home/runner/.Xresources >/dev/null
 
           sudo cp /etc/xrdp/startwm.sh /etc/xrdp/startwm.sh.original
-          sudo bash -c 'cat >/etc/xrdp/startwm.sh <<EOF
+          sudo bash -c 'cat >/etc/xrdp/startwm.sh << "EOF"
 #!/bin/sh
 unset DBUS_SESSION_BUS_ADDRESS
 unset XDG_RUNTIME_DIR
-. \$HOME/.profile
+. "$HOME/.profile"
 
 if [ -r /etc/default/locale ]; then
- . /etc/default/locale
- export LANG LANGUAGE
+  . /etc/default/locale
+  export LANG LANGUAGE
 fi
+
 startxfce4
 EOF'
 
+          sudo chmod +x /etc/xrdp/startwm.sh
           sudo systemctl enable xrdp
           sudo systemctl restart xrdp
 
@@ -45,11 +47,9 @@ EOF'
         run: |
           sudo apt-get install -y qbittorrent-nox
 
-          # Crear usuario de servicio
           sudo useradd -m -s /usr/sbin/nologin qbittorrent || true
 
-          # Servicio systemd basado en guía oficial de qBittorrent
-          sudo bash -c 'cat >/etc/systemd/system/qbittorrent-nox.service <<EOF
+          sudo bash -c 'cat >/etc/systemd/system/qbittorrent-nox.service << "EOF"
 [Unit]
 Description=qBittorrent-nox service
 Documentation=man:qbittorrent-nox(1)
@@ -73,12 +73,10 @@ EOF'
 
       - name: 4. Configurar usuario seedbox y vsftpd
         run: |
-          # Usuario principal para tus archivos
           sudo useradd -m -s /bin/bash seeduser || true
           echo "seeduser:seedbox2024" | sudo chpasswd
 
-          # Ajustar permisos para que vsftpd apunte al home del usuario
-          sudo bash -c 'cat >/etc/vsftpd.conf <<EOF
+          sudo bash -c 'cat >/etc/vsftpd.conf << "EOF"
 listen=YES
 listen_ipv6=NO
 anonymous_enable=NO
