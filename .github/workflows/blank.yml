@@ -1,0 +1,94 @@
+name: Linux-KDE-RDP-FTP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Actualizar e Instalar KDE Plasma y RDP
+        run: |
+          sudo apt update
+          # Instalamos KDE Plasma (el motor de Kubuntu) y XRDP
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y kde-plasma-desktop xrdp dbus-x11
+          
+          # Configurar el escritorio para que inicie KDE al conectar por RDP
+          echo "startplasma-x11" > ~/.xsession
+          sudo adduser xrdp ssl-cert
+          sudo systemctl restart xrdp
+
+      - name: Instalar Servidor FTP (vsftpd)
+        run: |
+          sudo apt install -y vsftpd
+          # Configuración básica para permitir subida de archivos
+          sudo bash -c 'cat > /etc/vsftpd.conf <<EOF
+          listen=YES
+          local_enable=YES
+          write_enable=YES
+          local_umask=022
+          xferlog_enable=YES
+          connect_from_port_20=YES
+          pasv_enable=YES
+          pasv_min_port=40000
+          pasv_max_port=40100
+          EOF'
+          sudo systemctl restart vsftpd
+
+      - name: Instalar Apps (Firefox, Motrix, JDownloader)
+        run: |
+          sudo apt install -y firefox wget curl default-jdk
+          
+          # Instalar Motrix
+          MOTRIX_URL=$(curl -s https://api.github.com/repos/agalwood/Motrix/releases/latest | grep "browser_download_url.*deb" | cut -d '"' -f 4 | head -n 1)
+          wget -O motrix.deb "$MOTRIX_URL"
+          sudo apt install -y ./motrix.deb
+          
+          # Descargar JDownloader 2 (Portable Jar)
+          wget http://installer.jdownloader.org/JDownloader09theoldgoodone.jar -O JDownloader.jar
+
+      - name: Configurar Usuario de Acceso
+        run: |
+          # Usuario: rdpuser | Password: rdpuser123
+          # Puedes cambiar la contraseña aquí abajo
+          USER="rdpuser"
+          PASS="rdpuser123"
+          sudo useradd -m -s /bin/bash $USER
+          echo "$USER:$PASS" | sudo chpasswd
+          sudo usermod -aG sudo $USER
+          
+          # Colocar JDownloader en el escritorio del nuevo usuario
+          sudo mkdir -p /home/$USER/Desktop
+          sudo mv JDownloader.jar /home/$USER/Desktop/
+          sudo chown -R $USER:$USER /home/$USER/
+          
+          echo "ACCESO_USER=$USER" >> $GITHUB_ENV
+          echo "ACCESO_PASS=$PASS" >> $GITHUB_ENV
+
+      - name: Conectar a Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          # RECUERDA: El Secret TAILSCALE_AUTH_KEY debe ser una Auth Key (tskey-auth-...)
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=kubuntu-rdp-server
+          echo "IP_TS=$(tailscale ip -4)" >> $GITHUB_ENV
+
+      - name: Credenciales Finales
+        run: |
+          echo "============================================"
+          echo "SISTEMA KDE READY (ACCESO RDP + FTP)"
+          echo "IP TAILSCALE: ${{ env.IP_TS }}"
+          echo "USUARIO: ${{ env.ACCESO_USER }}"
+          echo "PASSWORD: ${{ env.ACCESO_PASS }}"
+          echo "============================================"
+          echo "RDP: Puerto 3389"
+          echo "FTP: Puerto 21"
+          echo "============================================"
+
+      - name: Mantener Conexión
+        run: |
+          while :; do 
+            echo "Keep-alive: $(date)"
+            sleep 300
+          done
