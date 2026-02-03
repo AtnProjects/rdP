@@ -1,4 +1,4 @@
-name: RDP rootkit-mode (Fixed Password Policy)
+name: RDP rootkit-mode + Fast HTTP Server
 
 on:
   workflow_dispatch:
@@ -9,89 +9,69 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      # 1. Configuración de RDP
-      - name: Configure RDP
-        run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-          Restart-Service -Name TermService -Force
+    # 1. Habilitar RDP
+    - name: Configure RDP
+      run: |
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 0
+        netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+        Restart-Service TermService -Force
 
-      # 2. Instalación de Apps (qBittorrent, 7Zip) y Descarga de Motrix
-      - name: Install Apps & Download Motrix
-        run: |
-          choco install qbittorrent -y --no-progress
-          choco install 7zip -y --no-progress
-          Invoke-WebRequest -Uri "https://dl.motrix.app/release/Motrix-1.8.19-x64.exe" -OutFile "C:\Users\Public\Desktop\Motrix-Installer.exe"
+    # 2. Instalar herramientas
+    - name: Install tools
+      run: |
+        choco install 7zip aria2 python -y --no-progress
 
-      # 3. Crear Usuario rootkit / buzon2005 (Desactivando políticas de complejidad)
-      - name: Create Fixed User
-        run: |
-          Write-Host "Desactivando politicas de complejidad de contrasenas..."
-          # Exportar politica actual, modificar y re-importar para permitir contrasenas simples
-          secedit /export /cfg config.cfg
-          (Get-Content config.cfg) -replace 'PasswordComplexity = 1', 'PasswordComplexity = 0' | Set-Content config.cfg
-          secedit /configure /db $env:windir\security\local.sdb /cfg config.cfg /areas SECURITYPOLICY
-          
-          Write-Host "Creando usuario rootkit..."
-          $pass = "buzon2005" | ConvertTo-SecureString -AsPlainText -Force
-          New-LocalUser -Name "rootkit" -Password $pass -AccountNeverExpires -Description "RDP User"
-          Add-LocalGroupMember -Group "Administrators" -Member "rootkit"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "rootkit"
+    # 3. Crear usuario rootkit
+    - name: Create user rootkit
+      run: |
+        secedit /export /cfg c.cfg
+        (Get-Content c.cfg) -replace 'PasswordComplexity = 1','PasswordComplexity = 0' | Set-Content c.cfg
+        secedit /configure /db $env:windir\security\local.sdb /cfg c.cfg /areas SECURITYPOLICY
 
-      # 4. Configurar Auto-CMD al Iniciar Sesión
-      - name: Setup Auto-Launch Command
-        run: |
-          $scriptContent = @"
-          @echo off
-          title CONSOLA ROOTKIT - TAILDROP
-          echo ====================================================
-          echo           BIENVENIDO ROOTKIT - COMANDO LISTO
-          echo ====================================================
-          echo INSTRUCCIONES TAILDROP:
-          echo Para enviar: tailscale file cp "archivo" nombre-pc:
-          echo Los archivos recibidos estan en la carpeta Descargas.
-          echo ====================================================
-          cmd /k
-          "@
-          $scriptPath = "C:\Users\Public\Documents\AutoRun.bat"
-          $scriptContent | Out-File -FilePath $scriptPath -Encoding ASCII
-          
-          $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-          Set-ItemProperty -Path $registryPath -Name "AutoComando" -Value "cmd.exe /c start $scriptPath"
+        $p = "buzon2005" | ConvertTo-SecureString -AsPlainText -Force
+        New-LocalUser rootkit -Password $p -AccountNeverExpires
+        Add-LocalGroupMember Administrators rootkit
+        Add-LocalGroupMember "Remote Desktop Users" rootkit
 
-      # 5. Instalar Última Versión de Tailscale
-      - name: Install Latest Tailscale
-        run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale_latest.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          
-          $WScriptShell = New-Object -ComObject WScript.Shell
-          $ShortcutGUI = $WScriptShell.CreateShortcut("C:\Users\Public\Desktop\Tailscale-GUI.lnk")
-          $ShortcutGUI.TargetPath = "C:\Program Files\Tailscale\tailscale-ipn.exe"
-          $ShortcutGUI.Save()
+    # 4. Instalar Tailscale
+    - name: Install Tailscale
+      run: |
+        Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi -OutFile ts.msi
+        Start-Process msiexec.exe -ArgumentList "/i ts.msi /quiet /norestart" -Wait
 
-      # 6. Conectar Tailscale
-      - name: Connect Tailscale
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+    # 5. Conectar Tailscale
+    - name: Tailscale up
+      run: |
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
+        $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+        echo "TSIP=$ip" >> $env:GITHUB_ENV
 
-      # 7. Comando xfreerdp3 y Bucle
-      - name: Maintain Connection
-        run: |
-          Write-Host "`n============================================="
-          Write-Host "          SERVIDOR LISTO (MODO ROOTKIT)"
-          Write-Host "============================================="
-          Write-Host "IP: $env:TAILSCALE_IP"
-          Write-Host "User: rootkit | Pass: buzon2005"
-          Write-Host "---------------------------------------------"
-          Write-Host "COMANDO XFREERDP3:"
-          Write-Host "xfreerdp3 /v:$env:TAILSCALE_IP /u:rootkit /p:buzon2005 /sound /clipboard /mic /dynamic-resolution /gfx"
-          Write-Host "=============================================`n"
-          
-          while ($true) { Start-Sleep -Seconds 300 }
+    # 6. Preparar carpeta de archivos
+    - name: Prepare Uploads
+      run: |
+        mkdir C:\Users\rootkit\Uploads
+        icacls C:\Users\rootkit\Uploads /grant rootkit:(OI)(CI)F
+
+    # 7. Servidor HTTP ULTRA RÁPIDO
+    - name: Start HTTP Server
+      run: |
+        Start-Process powershell -ArgumentList `
+          "-NoExit", `
+          "-Command cd C:\Users\rootkit\Uploads; python -m http.server 8000"
+
+    # 8. Info final + mantener vivo
+    - name: Info
+      run: |
+        Write-Host ""
+        Write-Host "==================== READY ===================="
+        Write-Host "RDP:"
+        Write-Host "xfreerdp3 /v:$env:TSIP /u:rootkit /p:buzon2005 /gfx /dynamic-resolution"
+        Write-Host ""
+        Write-Host "DESCARGAS ULTRA RAPIDAS DESDE TU HOST:"
+        Write-Host "aria2c -x 16 -s 16 http://$env:TSIP:8000/ARCHIVO"
+        Write-Host ""
+        Write-Host "CARPETA SERVIDA:"
+        Write-Host "C:\Users\rootkit\Uploads"
+        Write-Host "=============================================="
+        while ($true) { Start-Sleep 300 }
