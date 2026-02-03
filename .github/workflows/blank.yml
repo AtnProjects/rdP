@@ -1,4 +1,4 @@
-name: RDP rootkit-mode + Fast HTTP Server
+name: RDP Windows Session + HTTP Server
 
 on:
   workflow_dispatch:
@@ -6,24 +6,26 @@ on:
 jobs:
   rdp-session:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 360 # El máximo real en GitHub Free es 360 (6 horas)
 
     steps:
     # 1. Habilitar RDP
-    - name: Configure RDP
+    - name: Configure Remote Desktop
       run: |
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 0
         netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+        # Regla necesaria para el servidor HTTP
+        netsh advfirewall firewall add rule name="PythonServer" dir=in action=allow protocol=TCP localport=8000
         Restart-Service TermService -Force
 
     # 2. Instalar herramientas
-    - name: Install tools
+    - name: Install Tools
       run: |
         choco install 7zip aria2 python -y --no-progress
 
-    # 3. Crear usuario rootkit
-    - name: Create user rootkit
+    # 3. Crear usuario (Cambiado el comando de complejidad para asegurar que acepte la clave)
+    - name: Create Session User
       run: |
         secedit /export /cfg c.cfg
         (Get-Content c.cfg) -replace 'PasswordComplexity = 1','PasswordComplexity = 0' | Set-Content c.cfg
@@ -41,37 +43,38 @@ jobs:
         Start-Process msiexec.exe -ArgumentList "/i ts.msi /quiet /norestart" -Wait
 
     # 5. Conectar Tailscale
-    - name: Tailscale up
+    - name: Tailscale Connect
       run: |
         & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
         $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
         echo "TSIP=$ip" >> $env:GITHUB_ENV
 
-    # 6. Preparar carpeta de archivos
-    - name: Prepare Uploads
+    # 6. Preparar carpeta de archivos (CORREGIDO EL ERROR DE ICACLS)
+    - name: Prepare Uploads Folder
       run: |
-        mkdir C:\Users\rootkit\Uploads
-        icacls C:\Users\rootkit\Uploads /grant rootkit:(OI)(CI)F
+        New-Item -ItemType Directory -Force -Path C:\Users\rootkit\Uploads
+        # Se usan comillas para que PowerShell no interprete (OI)(CI)
+        icacls "C:\Users\rootkit\Uploads" /grant "rootkit:(OI)(CI)F"
 
     # 7. Servidor HTTP ULTRA RÁPIDO
     - name: Start HTTP Server
       run: |
-        Start-Process powershell -ArgumentList `
-          "-NoExit", `
-          "-Command cd C:\Users\rootkit\Uploads; python -m http.server 8000"
+        Start-Process python -ArgumentList "-m http.server 8000" -WorkingDirectory "C:\Users\rootkit\Uploads"
 
     # 8. Info final + mantener vivo
-    - name: Info
+    - name: Display Info & Keep Alive
       run: |
         Write-Host ""
-        Write-Host "==================== READY ===================="
-        Write-Host "RDP:"
+        Write-Host "==================== CONFIGURACIÓN LISTA ===================="
+        Write-Host "CONEXIÓN RDP:"
         Write-Host "xfreerdp3 /v:$env:TSIP /u:rootkit /p:buzon2005 /gfx /dynamic-resolution"
         Write-Host ""
-        Write-Host "DESCARGAS ULTRA RAPIDAS DESDE TU HOST:"
-        Write-Host "aria2c -x 16 -s 16 http://$env:TSIP:8000/ARCHIVO"
+        Write-Host "DESCARGAS DESDE TU PC (Usando aria2):"
+        Write-Host "aria2c -x 16 -s 16 http://$env:TSIP:8000/NOMBRE_ARCHIVO"
         Write-Host ""
-        Write-Host "CARPETA SERVIDA:"
+        Write-Host "CARPETA LOCAL EN EL RUNNER:"
         Write-Host "C:\Users\rootkit\Uploads"
-        Write-Host "=============================================="
+        Write-Host "============================================================="
+        Write-Host "Nota: El runner se cerrará automáticamente en 6 horas."
+        # Bucle optimizado para no consumir CPU
         while ($true) { Start-Sleep 300 }
