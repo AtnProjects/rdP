@@ -1,4 +1,4 @@
-name: RDP Windows Session + HTTP Server
+name: RDP Windows + Nginx Turbo (D-Drive)
 
 on:
   workflow_dispatch:
@@ -6,75 +6,101 @@ on:
 jobs:
   rdp-session:
     runs-on: windows-latest
-    timeout-minutes: 360 # El máximo real en GitHub Free es 360 (6 horas)
+    timeout-minutes: 360
 
     steps:
-    # 1. Habilitar RDP
-    - name: Configure Remote Desktop
+    # 1. Configuración de Red y RDP
+    - name: Configure System
       run: |
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 0
         netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
-        # Regla necesaria para el servidor HTTP
-        netsh advfirewall firewall add rule name="PythonServer" dir=in action=allow protocol=TCP localport=8000
-        Restart-Service TermService -Force
+        netsh advfirewall firewall add rule name="Nginx-Turbo" dir=in action=allow protocol=TCP localport=80
+        # Optimización TCP para descargas pesadas
+        netsh int tcp set global autotuninglevel=normal
+        netsh int tcp set global congestionprovider=ctcp
 
     # 2. Instalar herramientas
     - name: Install Tools
-      run: |
-        choco install 7zip aria2 python -y --no-progress
+      run: choco install 7zip aria2 python nginx tailscale -y --no-progress
 
-    # 3. Crear usuario (Cambiado el comando de complejidad para asegurar que acepte la clave)
-    - name: Create Session User
+    # 3. Crear usuario (rootkit)
+    - name: Create User
       run: |
-        secedit /export /cfg c.cfg
-        (Get-Content c.cfg) -replace 'PasswordComplexity = 1','PasswordComplexity = 0' | Set-Content c.cfg
-        secedit /configure /db $env:windir\security\local.sdb /cfg c.cfg /areas SECURITYPOLICY
-
         $p = "buzon2005" | ConvertTo-SecureString -AsPlainText -Force
         New-LocalUser rootkit -Password $p -AccountNeverExpires
         Add-LocalGroupMember Administrators rootkit
         Add-LocalGroupMember "Remote Desktop Users" rootkit
 
-    # 4. Instalar Tailscale
-    - name: Install Tailscale
-      run: |
-        Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi -OutFile ts.msi
-        Start-Process msiexec.exe -ArgumentList "/i ts.msi /quiet /norestart" -Wait
-
-    # 5. Conectar Tailscale
+    # 4. Conectar Tailscale
     - name: Tailscale Connect
       run: |
         & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
         $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
         echo "TSIP=$ip" >> $env:GITHUB_ENV
 
-    # 6. Preparar carpeta de archivos (CORREGIDO EL ERROR DE ICACLS)
-    - name: Prepare Uploads Folder
+    # 5. Preparar Carpeta en Disco D: (Temporary Storage)
+    - name: Prepare D-Drive Folder
       run: |
-        New-Item -ItemType Directory -Force -Path C:\Users\rootkit\Uploads
-        # Se usan comillas para que PowerShell no interprete (OI)(CI)
-        icacls "C:\Users\rootkit\Uploads" /grant "rootkit:(OI)(CI)F"
+        New-Item -ItemType Directory -Force -Path D:\Uploads
+        # Dar permisos totales al usuario para que pueda mover archivos ahí
+        icacls "D:\Uploads" /grant "rootkit:(OI)(CI)F"
 
-    # 7. Servidor HTTP ULTRA RÁPIDO
-    - name: Start HTTP Server
+    # 6. Configurar Nginx Turbo (Tu config recomendada)
+    - name: Setup Nginx Turbo
       run: |
-        Start-Process python -ArgumentList "-m http.server 8000" -WorkingDirectory "C:\Users\rootkit\Uploads"
+        $nginxPath = "C:\tools\nginx"
+        if (!(Test-Path $nginxPath)) { $nginxPath = (Get-ChildItem -Path C:\tools\nginx-* | Select-Object -First 1).FullName }
 
-    # 8. Info final + mantener vivo
-    - name: Display Info & Keep Alive
+        $conf = @"
+        worker_processes 1;  # Optimizado para los recursos del runner
+        events { 
+            worker_connections 2048; 
+        }
+
+        http {
+            include       mime.types;
+            default_type  application/octet-stream;
+            
+            sendfile        on;
+            tcp_nopush      on;
+            tcp_nodelay     on;
+            sendfile_max_chunk 2m;
+            
+            output_buffers 1 64k;
+            client_body_buffer_size 512k;
+            client_max_body_size 0;
+            gzip off;
+
+            server {
+                listen       80; # Usando puerto 80 para máxima compatibilidad
+                server_name  localhost;
+
+                location / {
+                    root   D:/Uploads; # RUTA CAMBIADA A DISCO D:
+                    autoindex on;
+                    autoindex_exact_size off;
+                    autoindex_localtime on;
+                    try_files `$uri `$uri/ =404;
+                }
+            }
+        }
+"@
+        $conf | Out-File "$nginxPath\conf\nginx.conf" -Encoding ASCII
+        
+        # Iniciar Nginx desde su directorio
+        cd $nginxPath
+        Start-Process .\nginx.exe
+
+    # 7. Info Final
+    - name: Final Info
       run: |
+        Write-Host "=============================================="
+        Write-Host "ACCESO RDP:"
+        Write-Host "IP: $env:TSIP | Usuario: rootkit | Pass: buzon2005"
         Write-Host ""
-        Write-Host "==================== CONFIGURACIÓN LISTA ===================="
-        Write-Host "CONEXIÓN RDP:"
-        Write-Host "xfreerdp3 /v:$env:TSIP /u:rootkit /p:buzon2005 /gfx /dynamic-resolution"
-        Write-Host ""
-        Write-Host "DESCARGAS DESDE TU PC (Usando aria2):"
-        Write-Host "aria2c -x 16 -s 16 http://$env:TSIP:8000/NOMBRE_ARCHIVO"
-        Write-Host ""
-        Write-Host "CARPETA LOCAL EN EL RUNNER:"
-        Write-Host "C:\Users\rootkit\Uploads"
-        Write-Host "============================================================="
-        Write-Host "Nota: El runner se cerrará automáticamente en 6 horas."
-        # Bucle optimizado para no consumir CPU
+        Write-Host "TURBO SERVER (DISCO D):"
+        Write-Host "URL: http://$env:TSIP"
+        Write-Host "Carpeta en RDP: D:\Uploads"
+        Write-Host "=============================================="
         while ($true) { Start-Sleep 300 }
