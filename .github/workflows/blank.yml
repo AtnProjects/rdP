@@ -1,29 +1,32 @@
-name: Seedbox-Ultimate-Fix
+name: Seedbox-Final-NoErrors
 
 on:
   workflow_dispatch:
 
 jobs:
-  seedbox-run:
+  seedbox:
     runs-on: ubuntu-latest
     timeout-minutes: 3600
 
     steps:
-      - name: 1. Instalación del Sistema (Core Fixes)
+      - name: 1. Instalación del Sistema (Corregida)
         run: |
           sudo apt-get update
-          # Instalamos XFCE, XRDP, DBus (Vital para errores) y herramientas
-          # dbus-x11 y x11-xserver-utils arreglan el error de "failsafe session"
+          # Instalamos XFCE, XRDP, herramientas y xserver-xorg-legacy (necesario para el wrapper)
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             xfce4 xfce4-terminal xfce4-session thunar \
-            xrdp dbus-x11 x11-xserver-utils \
+            xrdp dbus-x11 x11-xserver-utils xserver-xorg-legacy \
             vsftpd wget curl ca-certificates \
             qbittorrent
 
-          # FIX PANTALLA NEGRA: Permitir a cualquier usuario iniciar las X
-          sudo sed -i 's/allowed_users=console/allowed_users=anybody/' /etc/X11/Xwrapper.config
+          # --- FIX DEL ERROR QUE TE SALIÓ ---
+          # En lugar de 'sed', usamos 'echo' para crear el archivo si no existe
+          sudo mkdir -p /etc/X11
+          echo "allowed_users=anybody" | sudo tee /etc/X11/Xwrapper.config
+          # ----------------------------------
 
-          # FIX POPUPS MOLESTOS: Evitar que pida contraseña para perfiles de color
+          # FIX POPUPS: Evitar contraseña de perfiles de color
+          sudo mkdir -p /etc/polkit-1/localauthority/50-local.d/
           sudo bash -c 'cat > /etc/polkit-1/localauthority/50-local.d/45-allow-colord.pkla <<EOF
           [Allow Colord all Users]
           Identity=unix-user:*
@@ -39,15 +42,14 @@ jobs:
           wget -q -O motrix.deb "$MOTRIX_URL"
           sudo apt install -y ./motrix.deb || sudo apt-get install -f -y
 
-      - name: 3. Configurar Usuario y Sesión (CRÍTICO)
+      - name: 3. Configurar Usuario y Sesión
         run: |
-          # Crear usuario seeduser
+          # Crear usuario
           sudo useradd -m -s /bin/bash seeduser
           echo "seeduser:seedbox2024" | sudo chpasswd
           sudo usermod -aG sudo seeduser
 
-          # Configurar la sesión RDP para que arranque XFCE correctamente
-          # dbus-run-session es el secreto para que no falle al inicio
+          # Configurar sesión XFCE robusta
           sudo bash -c 'cat > /home/seeduser/.xsession <<EOF
           export XDG_SESSION_TYPE=x11
           export XDG_CURRENT_DESKTOP=XFCE
@@ -55,11 +57,11 @@ jobs:
           exec dbus-run-session startxfce4
           EOF'
           
-          # Asegurar permisos (si esto falla, la pantalla se ve negra)
+          # Permisos correctos
           sudo chown seeduser:seeduser /home/seeduser/.xsession
           sudo chmod 755 /home/seeduser/.xsession
           
-          # Reiniciar servicio RDP
+          # Reiniciar RDP
           sudo adduser xrdp ssl-cert
           sudo systemctl restart xrdp
 
@@ -85,24 +87,23 @@ jobs:
       - name: 5. Conectar Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
-          # IMPORTANTE: Asegúrate de que el secret TAILSCALE_AUTH_KEY es correcto
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=seedbox-final
+          # RECUERDA: Verifica tu TAILSCALE_AUTH_KEY en los Secrets
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=seedbox-ok
           echo "TS_IP=$(tailscale ip -4)" >> $GITHUB_ENV
 
-      - name: 6. Información de Acceso
+      - name: 6. Información Final
         run: |
           echo "===================================================="
-          echo "✅ SEEDBOX REPARADA Y LISTA"
+          echo "✅ SEEDBOX LISTA (ERROR CORREGIDO)"
           echo "===================================================="
-          echo "🌐 IP TAILSCALE: ${{ env.TS_IP }}"
-          echo "👤 USUARIO:      seeduser"
-          echo "🔑 PASSWORD:     seedbox2024"
+          echo "🌐 IP:       ${{ env.TS_IP }}"
+          echo "👤 USER:     seeduser"
+          echo "🔑 PASS:     seedbox2024"
           echo "===================================================="
-          echo "📂 FTP: Puerto 21 (Modo Pasivo)"
-          echo "💻 RDP: Puerto 3389"
-          echo "⬇️ APPS: qBittorrent, Motrix"
+          echo "Apps instaladas: qBittorrent, Motrix, Thunar"
+          echo "Sin Firefox (Más ligero)"
           echo "===================================================="
 
-      - name: 7. Mantener Vivo
+      - name: 7. Keep Alive
         run: |
           while :; do sleep 300; done
