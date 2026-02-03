@@ -1,4 +1,4 @@
-name: RDP + FTP + Apps (Motrix Download Only)
+name: RDP + FTP + Apps (Fixed IIS)
 
 on:
   workflow_dispatch:
@@ -11,40 +11,32 @@ jobs:
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # Habilitar RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-
-          # Reglas Firewall RDP
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-          
           Restart-Service -Name TermService -Force
 
       # ---------------------------------------------------------
-      # INSTALACIÓN Y DESCARGA DE APPS
+      # APPS
       # ---------------------------------------------------------
       - name: Install Tools & Download Motrix
         run: |
-          Write-Host "Installing qBittorrent & Chrome..."
+          Write-Host "Installing apps..."
           choco install googlechrome -y --no-progress
           choco install qbittorrent -y --no-progress
           choco install 7zip -y --no-progress
           
-          Write-Host "Downloading Motrix (Installer Only)..."
+          Write-Host "Downloading Motrix..."
           $motrixUrl = "https://dl.motrix.app/release/Motrix-1.8.19-x64.exe"
-          # Guardamos el archivo en el Escritorio Público para que lo veas al entrar
           $savePath = "C:\Users\Public\Desktop\Motrix-Installer.exe"
-          
           Invoke-WebRequest -Uri $motrixUrl -OutFile $savePath
-          
-          Write-Host "Motrix downloaded successfully to Desktop."
 
       # ---------------------------------------------------------
-      # CREACIÓN DE USUARIOS (RDP y FTP)
+      # USUARIOS
       # ---------------------------------------------------------
-      - name: Create RDP & FTP Users
+      - name: Create Users
         run: |
           Add-Type -AssemblyName System.Security
           function Generate-Password {
@@ -55,15 +47,12 @@ jobs:
               $raw += $charSet.Number | Get-Random -Count 3
               return -join ($raw | Sort-Object { Get-Random })
           }
-
-          # 1. Usuario RDP
           $rdpPass = Generate-Password
           $secureRdp = ConvertTo-SecureString $rdpPass -AsPlainText -Force
           New-LocalUser -Name "RDP" -Password $secureRdp -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
           
-          # 2. Usuario FTP
           $ftpPass = Generate-Password
           $secureFtp = ConvertTo-SecureString $ftpPass -AsPlainText -Force
           New-LocalUser -Name "FTPUser" -Password $secureFtp -AccountNeverExpires
@@ -72,16 +61,22 @@ jobs:
           echo "FTP_PASS=$ftpPass" >> $env:GITHUB_ENV
 
       # ---------------------------------------------------------
-      # SERVIDOR FTP
+      # SERVIDOR FTP (CORREGIDO)
       # ---------------------------------------------------------
       - name: Setup IIS FTP Server
         run: |
-          Install-WindowsFeature Web-FTP-Server, Web-FTP-Service, Web-FTP-Ext
-          
+          Write-Host "1. Installing Core IIS Web Server..."
+          # Instalamos primero la base con herramientas de administración
+          Install-WindowsFeature -Name Web-Server -IncludeManagementTools
+
+          Write-Host "2. Installing FTP Server..."
+          # Luego instalamos el FTP
+          Install-WindowsFeature -Name Web-FTP-Server -IncludeAllSubFeature
+
+          Write-Host "3. Configuring FTP Site..."
           $ftpPath = "C:\ftp_root"
           New-Item -Path $ftpPath -ItemType Directory -Force
           
-          # Permisos
           $acl = Get-Acl $ftpPath
           $permission = "FTPUser","FullControl","ContainerInherit,ObjectInherit","None","Allow"
           $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule $permission
@@ -91,7 +86,6 @@ jobs:
           Import-Module WebAdministration
           Remove-WebSite -Name "Default Web Site" -ErrorAction SilentlyContinue
 
-          # Sitio FTP
           New-WebFtpSite -Name "MyFTPSite" -Port 21 -PhysicalPath $ftpPath -Force
           
           Set-ItemProperty "IIS:\Sites\MyFTPSite" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
@@ -101,7 +95,11 @@ jobs:
           Add-WebConfiguration -Filter /system.ftpServer/security/authorization -Value @{accessType="Allow"; users="FTPUser"; permissions="Read,Write"} -PSPath IIS:\ -Location "MyFTPSite"
           
           netsh advfirewall firewall add rule name="FTP-Port-21" dir=in action=allow protocol=TCP localport=21
+          Write-Host "FTP Setup Complete."
 
+      # ---------------------------------------------------------
+      # TAILSCALE
+      # ---------------------------------------------------------
       - name: Install Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
@@ -129,20 +127,10 @@ jobs:
           Write-Host "`n============================================="
           Write-Host "           SYSTEM READY"
           Write-Host "============================================="
-          Write-Host "IP Address:   $env:TAILSCALE_IP"
-          Write-Host "---------------------------------------------"
+          Write-Host "IP:           $env:TAILSCALE_IP"
           Write-Host "RDP User:     RDP"
-          Write-Host "RDP Password: $env:RDP_PASS"
-          Write-Host "---------------------------------------------"
+          Write-Host "RDP Pass:     $env:RDP_PASS"
           Write-Host "FTP User:     FTPUser"
-          Write-Host "FTP Password: $env:FTP_PASS"
-          Write-Host "---------------------------------------------"
-          Write-Host "STATUS:"
-          Write-Host "- qBittorrent: INSTALLED"
-          Write-Host "- Motrix:      DOWNLOADED (On Desktop)"
+          Write-Host "FTP Pass:     $env:FTP_PASS"
           Write-Host "=============================================`n"
-          
-          while ($true) {
-              Write-Host "[$(Get-Date)] Server Active..."
-              Start-Sleep -Seconds 300
-          }
+          while ($true) { Start-Sleep -Seconds 300 }
