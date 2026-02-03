@@ -45,62 +45,65 @@ jobs:
         New-Item -ItemType Directory -Force -Path D:\Uploads
         icacls "D:\Uploads" /grant "rootkit:(OI)(CI)F"
 
-    # 6. Configurar Nginx Turbo (Máxima Robustez de YAML)
+    # 6. Configurar Nginx Turbo (Corregido: YAML literal + $uri normal)
     - name: Setup Nginx Turbo
       run: |
         $nginxPath = "C:\tools\nginx"
-        
-        $conf = @"
-        worker_processes 1;
-        events { 
-            worker_connections 2048; 
+        New-Item -ItemType Directory -Force -Path "$nginxPath\conf"
+
+        @"
+worker_processes 1;
+events {
+    worker_connections 2048;
+}
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    sendfile on;
+    tcp_nopush     on;
+    tcp_nodelay on;
+    sendfile_max_chunk 2m;
+
+    output_buffers 1 64k;
+    client_body_buffer_size 512k;
+    client_max_body_size 0;
+    gzip off;
+
+    server {
+        listen 8000;
+        server_name localhost;
+
+        location / {
+            root D:/Uploads;
+            autoindex on;
+            autoindex_exact_size off;
+            autoindex_localtime on;
+            try_files $uri $uri/ =404;
         }
+    }
+}
+"@ | Out-File "$nginxPath\conf\nginx.conf" -Encoding ASCII
 
-        http {
-            include       mime.types;
-            default_type  application/octet-stream;
-            
-            sendfile        on;
-            tcp_nopush      on;
-            tcp_nodelay     on;
-            sendfile_max_chunk 2m;
-            
-            output_buffers 1 64k;
-            client_body_buffer_size 512k;
-            client_max_body_size 0;
-            gzip off;
-
-            server {
-                listen       8000;
-                server_name  localhost;
-
-                location / {
-                    root   D:/Uploads;
-                    autoindex on;
-                    autoindex_exact_size off;
-                    autoindex_localtime on;
-                    # $$uri escapa el $ para PowerShell
-                    try_files $$uri $$uri/ =404;
-                }
-            }
-        }
-"@
-        $conf | Out-File "$nginxPath\conf\nginx.conf" -Encoding ASCII
+        # Verificar config y logs
+        Write-Host "Nginx config creada en: $nginxPath\conf\nginx.conf"
         
         # Iniciar Nginx
         cd $nginxPath
-        Start-Process .\nginx.exe
+        Start-Process .\nginx.exe -NoNewWindow
 
-    # 7. Info Final y Mantenimiento
+    # 7. Info Final y Mantenimiento (6 horas alive)
     - name: Final Info and Keep Alive
       run: |
         Write-Host "=============================================="
         Write-Host "ACCESO RDP:"
-        Write-Host "xfreerdp3 /v:$env:TSIP /u:rootkit /p:buzon2005 /gfx /dynamic-resolution"
+        Write-Host "xfreerdp /v:$env:TSIP /u:rootkit /p:buzon2005 /gfx /dynamic-resolution +clipboard"
         Write-Host ""
         Write-Host "TURBO SERVER (DISCO D):"
-        Write-Host "URL Motrix: http://$env:TSIP:8000/NOMBRE_ARCHIVO"
-        Write-Host "Carpeta en RDP: D:\Uploads"
+        Write-Host "URL: http://$env:TSIP:8000/ (autoindex en D:\Uploads)"
+        Write-Host "Carpeta RDP: D:\Uploads"
+        Write-Host "Nginx logs: C:\tools\nginx\logs\error.log"
         Write-Host "=============================================="
-        # Mantiene el runner vivo por 6 horas
+        # Keep alive 6h (timeout-minutes)
         while ($true) { Start-Sleep 300 }
