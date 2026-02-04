@@ -1,4 +1,30 @@
-name: RDP rootkit-mode (Taildrop + AutoCommand)
+
+Skip to content
+
+    AtnProjects
+    rdP
+
+Repository navigation
+
+    Code
+    Issues
+    Pull requests
+    Actions
+    Projects
+    Wiki
+    Security
+    Insights
+    Settings
+
+RDP rootkit-mode (Full Choco)
+RDP rootkit-mode (Taildrop + AutoCommand) #35
+
+    All jobs
+    Run details
+
+Workflow file for this run
+.github/workflows/blank.yml at b365a44
+name: RDP rootkit-mode (Full Choco)
 
 on:
   workflow_dispatch:
@@ -17,78 +43,107 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
-
-      # 2. Instalación de Apps y Descargas
-      - name: Install Apps & Download Installers
+      # 2. Instalación de Apps (SOLO CHOCOLATEY)
+      - name: Install Apps with Choco
         run: |
-          choco install qbittorrent -y --no-progress
-          choco install 7zip -y --no-progress
-          Invoke-WebRequest -Uri "https://dl.motrix.app/release/Motrix-1.8.19-x64.exe" -OutFile "C:\Users\Public\Desktop\Motrix-Installer.exe"
-          Invoke-WebRequest -Uri "https://github.com/localsend/localsend/releases/download/v1.16.1/LocalSend-1.16.1-windows-x86-64.exe" -OutFile "C:\Users\Public\Desktop\LocalSend-Installer.exe"
-
-      # 3. Crear Usuario Fijo (rootkit / buzon2005)
+          Write-Host "Configurando Chocolatey..."
+          choco feature enable -n allowGlobalConfirmation
+          
+          # Instalamos todo junto.
+          # --no-progress: VITAL para que no se quede pegado mostrando la barrita de carga.
+          # --limit-output: Para que no llene el log de texto basura.
+          Write-Host "Instalando qBittorrent, 7Zip y Motrix..."
+          choco install qbittorrent 7zip motrix -y --no-progress --limit-output --timeout 600
+      # 3. Crear Usuario Fijo
       - name: Create Fixed User
         run: |
-          $pass = "buzon2005" | ConvertTo-SecureString -AsPlainText -Force
+          $pass = "Buzon2005!" | ConvertTo-SecureString -AsPlainText -Force
           New-LocalUser -Name "rootkit" -Password $pass -AccountNeverExpires -Description "RDP User"
           Add-LocalGroupMember -Group "Administrators" -Member "rootkit"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "rootkit"
-
-      # 4. Configurar Comando Automático al Iniciar Sesión
+      # 4. Instalar y Configurar Nginx (FORZADO EN C:\Temp)
+      - name: Setup Nginx Web Server
+        run: |
+          # 1. Crear carpeta y archivo prueba
+          New-Item -ItemType Directory -Force -Path "C:\Temp"
+          "Nginx activo. Guarda tus descargas aqui." | Out-File "C:\Temp\LEEME.txt" -Encoding UTF8
+          # 2. Descargar Nginx (Este link es necesario porque Nginx no se instala bien como servicio con choco gratis)
+          Write-Host "Descargando Nginx..."
+          Invoke-WebRequest -Uri "http://nginx.org/download/nginx-1.24.0.zip" -OutFile "nginx.zip"
+          Expand-Archive -Path "nginx.zip" -DestinationPath "C:\"
+          Rename-Item -Path "C:\nginx-1.24.0" -NewName "nginx"
+          
+          # 3. Crear config limpia
+          $confPath = "C:\nginx\conf\nginx.conf"
+          $cleanConf = @"
+          worker_processes  1;
+          events {
+              worker_connections  1024;
+          }
+          http {
+              include       mime.types;
+              default_type  application/octet-stream;
+              sendfile        on;
+              keepalive_timeout  65;
+              server {
+                  listen       80;
+                  server_name  localhost;
+                  location / {
+                      root   C:/Temp;
+                      autoindex on;
+                      autoindex_exact_size off;
+                      autoindex_localtime on;
+                  }
+              }
+          }
+          "@
+          Set-Content -Path $confPath -Value $cleanConf -Encoding Ascii
+          # 4. Iniciar Nginx
+          netsh advfirewall firewall add rule name="Nginx-HTTP" dir=in action=allow protocol=TCP localport=80
+          cd C:\nginx
+          Start-Process "nginx.exe"
+      # 5. Configurar Auto-CMD
       - name: Setup Auto-Launch Command
         run: |
           $scriptContent = @"
           @echo off
+          title CONSOLA ROOTKIT
           echo ====================================================
-          echo           BIENVENIDO ROOTKIT - COMANDO LISTO
+          echo           BIENVENIDO ROOTKIT
           echo ====================================================
-          echo Escribe tu comando aqui abajo:
-          echo Para enviar archivos: tailscale file cp "archivo" nombre-pc:
+          echo ESTADO:
+          echo [OK] Nginx activo (Puerto 80)
+          echo [OK] Carpeta Publica: C:\Temp
+          echo.
+          echo URL de descarga: http://<IP-TAILSCALE>/
           echo ====================================================
+          cd C:\Temp
           cmd /k
           "@
           $scriptPath = "C:\Users\Public\Documents\AutoRun.bat"
           $scriptContent | Out-File -FilePath $scriptPath -Encoding ASCII
-          
-          # Registrar en el Registry para que se abra al loguear rootkit
           $registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
           Set-ItemProperty -Path $registryPath -Name "AutoComando" -Value "cmd.exe /c start $scriptPath"
-
-      # 5. Instalar Último Tailscale
+      # 6. Instalar Tailscale
       - name: Install Latest Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $installerPath = "$env:TEMP\tailscale_latest.msi"
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          
-          # Accesos directos en Escritorio
-          $WScriptShell = New-Object -ComObject WScript.Shell
-          $ShortcutGUI = $WScriptShell.CreateShortcut("C:\Users\Public\Desktop\Tailscale-GUI.lnk")
-          $ShortcutGUI.TargetPath = "C:\Program Files\Tailscale\tailscale-ipn.exe"
-          $ShortcutGUI.Save()
-
-      # 6. Conectar Tailscale
+      # 7. Conectar Tailscale
       - name: Connect Tailscale
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      # 7. Mantener Conexión e Instrucciones xfreerdp
+      # 8. Loop Final
       - name: Maintain Connection
         run: |
-          Write-Host "`n============================================="
-          Write-Host "          SERVIDOR LISTO (MODO ROOTKIT)"
           Write-Host "============================================="
-          Write-Host "IP: $env:TAILSCALE_IP"
-          Write-Host "User: rootkit"
-          Write-Host "Pass: buzon2005"
-          Write-Host "---------------------------------------------"
-          Write-Host "COMANDO PARA TU TERMINAL (XFREERDP3):"
-          Write-Host "xfreerdp3 /v:$env:TAILSCALE_IP /u:rootkit /p:buzon2005 /sound /clipboard /mic /dynamic-resolution /gfx"
-          Write-Host "---------------------------------------------"
-          Write-Host "NOTA: Al entrar, se abrira el comando auto."
-          Write-Host "=============================================`n"
-          
+          Write-Host "IP TAILSCALE: $env:TAILSCALE_IP"
+          Write-Host "URL WEB:      http://$env:TAILSCALE_IP"
+          Write-Host "USER/PASS:    rootkit / Buzon2005!"
+          Write-Host "============================================="
           while ($true) { Start-Sleep -Seconds 300 }
+Update blank.yml · AtnProjects/rdP@b365a44 
