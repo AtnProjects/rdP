@@ -1,4 +1,4 @@
-name: RDP rootkit-mode (Fixed Nginx)
+name: RDP rootkit-mode (Direct Install)
 
 on:
   workflow_dispatch:
@@ -18,12 +18,24 @@ jobs:
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      # 2. Instalación de Apps
-      - name: Install Apps & Download Motrix
+      # 2. Instalación de Apps (SIN CHOCOLATEY)
+      - name: Install Apps Direct
         run: |
-          Write-Host "Instalando qBittorrent y 7Zip..."
-          choco install qbittorrent -y --no-progress
-          choco install 7zip -y --no-progress
+          # 1. Instalar 7-Zip (Directo)
+          Write-Host "Descargando e Instalando 7-Zip..."
+          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2408-x64.exe" -OutFile "7z_inst.exe"
+          Start-Process "7z_inst.exe" -ArgumentList "/S" -Wait
+          Remove-Item "7z_inst.exe"
+
+          # 2. Instalar qBittorrent (Directo desde SourceForge/FossHub mirror confiable)
+          Write-Host "Descargando e Instalando qBittorrent..."
+          $qbitUrl = "https://sourceforge.net/projects/qbittorrent/files/qbittorrent-win32/qbittorrent-4.6.3/qbittorrent_4.6.3_x64_setup.exe/download"
+          Invoke-WebRequest -Uri $qbitUrl -OutFile "qbit_setup.exe"
+          Start-Process "qbit_setup.exe" -ArgumentList "/S" -Wait
+          Remove-Item "qbit_setup.exe"
+          
+          # 3. Descargar Motrix
+          Write-Host "Descargando Motrix..."
           Invoke-WebRequest -Uri "https://dl.motrix.app/release/Motrix-1.8.19-x64.exe" -OutFile "C:\Users\Public\Desktop\Motrix-Installer.exe"
 
       # 3. Crear Usuario Fijo
@@ -34,12 +46,12 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "rootkit"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "rootkit"
 
-      # 4. Instalar y Configurar Nginx (FORZADO)
+      # 4. Instalar y Configurar Nginx (FORZADO EN C:\Temp)
       - name: Setup Nginx Web Server
         run: |
-          # 1. Crear carpeta C:\Temp y un archivo de prueba
+          # 1. Crear carpeta y archivo prueba
           New-Item -ItemType Directory -Force -Path "C:\Temp"
-          "Si puedes leer esto, Nginx funciona correctamente." | Out-File "C:\Temp\LEEME_HOLA.txt" -Encoding UTF8
+          "Nginx funciona. Guarda tus archivos aqui." | Out-File "C:\Temp\LEEME.txt" -Encoding UTF8
 
           # 2. Descargar Nginx
           Write-Host "Descargando Nginx..."
@@ -47,7 +59,7 @@ jobs:
           Expand-Archive -Path "nginx.zip" -DestinationPath "C:\"
           Rename-Item -Path "C:\nginx-1.24.0" -NewName "nginx"
           
-          # 3. Sobrescribir nginx.conf con una configuración limpia y garantizada
+          # 3. Crear config limpia
           $confPath = "C:\nginx\conf\nginx.conf"
           $cleanConf = @"
           worker_processes  1;
@@ -73,11 +85,8 @@ jobs:
           "@
           Set-Content -Path $confPath -Value $cleanConf -Encoding Ascii
 
-          # 4. Firewall y Arranque
-          Write-Host "Abriendo Puerto 80..."
+          # 4. Iniciar
           netsh advfirewall firewall add rule name="Nginx-HTTP" dir=in action=allow protocol=TCP localport=80
-          
-          Write-Host "Iniciando servicio Nginx..."
           cd C:\nginx
           Start-Process "nginx.exe"
 
@@ -86,16 +95,15 @@ jobs:
         run: |
           $scriptContent = @"
           @echo off
-          title CONSOLA ROOTKIT - NGINX TEMP
+          title CONSOLA ROOTKIT
           echo ====================================================
           echo           BIENVENIDO ROOTKIT
           echo ====================================================
-          echo ESTADO DEL SERVIDOR WEB:
-          echo [OK] Nginx activo en puerto 80
+          echo ESTADO:
+          echo [OK] Nginx activo (Puerto 80)
           echo [OK] Carpeta: C:\Temp
           echo.
-          echo Para probar, abre en tu navegador: http://<IP-TAILSCALE>
-          echo Deberias ver el archivo 'LEEME_HOLA.txt'
+          echo URL de descarga: http://<IP-TAILSCALE>/
           echo ====================================================
           cd C:\Temp
           cmd /k
@@ -124,5 +132,5 @@ jobs:
       - name: Maintain Connection
         run: |
           Write-Host "IP TAILSCALE: $env:TAILSCALE_IP"
-          Write-Host "TEST URL:     http://$env:TAILSCALE_IP"
+          Write-Host "URL:          http://$env:TAILSCALE_IP"
           while ($true) { Start-Sleep -Seconds 300 }
