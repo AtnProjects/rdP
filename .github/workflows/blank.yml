@@ -1,4 +1,4 @@
-name: RDP rootkit-mode (Nginx Temp Dir)
+name: RDP rootkit-mode (Fixed Password)
 
 on:
   workflow_dispatch:
@@ -28,10 +28,11 @@ jobs:
           Write-Host "Descargando Motrix al Escritorio..."
           Invoke-WebRequest -Uri "https://dl.motrix.app/release/Motrix-1.8.19-x64.exe" -OutFile "C:\Users\Public\Desktop\Motrix-Installer.exe"
 
-      # 3. Crear Usuario Fijo (rootkit / buzon2005)
+      # 3. Crear Usuario Fijo (FIXED PASSWORD: Buzon2005!)
       - name: Create Fixed User
         run: |
-          $pass = "buzon2005" | ConvertTo-SecureString -AsPlainText -Force
+          # La contraseña debe tener Mayuscula, Minuscula, Numero y Simbolo
+          $pass = "Buzon2005!" | ConvertTo-SecureString -AsPlainText -Force
           New-LocalUser -Name "rootkit" -Password $pass -AccountNeverExpires -Description "RDP User"
           Add-LocalGroupMember -Group "Administrators" -Member "rootkit"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "rootkit"
@@ -111,10 +112,10 @@ jobs:
           Write-Host "============================================="
           Write-Host "IP TAILSCALE: $env:TAILSCALE_IP"
           Write-Host "USUARIO:      rootkit"
-          Write-Host "CONTRASEÑA:   buzon2005"
+          Write-Host "CONTRASEÑA:   Buzon2005!"
           Write-Host "---------------------------------------------"
           Write-Host "ACCESO RDP:"
-          Write-Host "xfreerdp3 /v:$env:TAILSCALE_IP /u:rootkit /p:buzon2005 /sound /clipboard /mic /dynamic-resolution /gfx"
+          Write-Host "xfreerdp3 /v:$env:TAILSCALE_IP /u:rootkit /p:Buzon2005! /sound /clipboard /mic /dynamic-resolution /gfx"
           Write-Host "---------------------------------------------"
           Write-Host "ACCESO HTTP (NAVEGADOR):"
           Write-Host "http://$env:TAILSCALE_IP"
