@@ -1,4 +1,4 @@
-name: RDP rootkit-mode (Choco Fixed)
+name: RDP rootkit-mode (Full Choco)
 
 on:
   workflow_dispatch:
@@ -18,20 +18,17 @@ jobs:
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      # 2. Instalación de Apps (CHOCOLATEY OPTIMIZADO)
-      - name: Install Apps via Chocolatey
+      # 2. Instalación de Apps (SOLO CHOCOLATEY)
+      - name: Install Apps with Choco
         run: |
-          # Optimizar Chocolatey para que no pida confirmaciones ni muestre barras de carga
+          Write-Host "Configurando Chocolatey..."
           choco feature enable -n allowGlobalConfirmation
           
-          Write-Host "Instalando 7zip..."
-          choco install 7zip -y --no-progress --limit-output --ignore-checksums
-          
-          Write-Host "Instalando qBittorrent..."
-          choco install qbittorrent -y --no-progress --limit-output --ignore-checksums
-          
-          Write-Host "Descargando Motrix (Manual)..."
-          Invoke-WebRequest -Uri "https://dl.motrix.app/release/Motrix-1.8.19-x64.exe" -OutFile "C:\Users\Public\Desktop\Motrix-Installer.exe"
+          # Instalamos todo junto.
+          # --no-progress: VITAL para que no se quede pegado mostrando la barrita de carga.
+          # --limit-output: Para que no llene el log de texto basura.
+          Write-Host "Instalando qBittorrent, 7Zip y Motrix..."
+          choco install qbittorrent 7zip motrix -y --no-progress --limit-output --timeout 600
 
       # 3. Crear Usuario Fijo
       - name: Create Fixed User
@@ -48,7 +45,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "C:\Temp"
           "Nginx activo. Guarda tus descargas aqui." | Out-File "C:\Temp\LEEME.txt" -Encoding UTF8
 
-          # 2. Descargar Nginx
+          # 2. Descargar Nginx (Este link es necesario porque Nginx no se instala bien como servicio con choco gratis)
           Write-Host "Descargando Nginx..."
           Invoke-WebRequest -Uri "http://nginx.org/download/nginx-1.24.0.zip" -OutFile "nginx.zip"
           Expand-Archive -Path "nginx.zip" -DestinationPath "C:\"
@@ -96,7 +93,7 @@ jobs:
           echo ====================================================
           echo ESTADO:
           echo [OK] Nginx activo (Puerto 80)
-          echo [OK] Carpeta: C:\Temp
+          echo [OK] Carpeta Publica: C:\Temp
           echo.
           echo URL de descarga: http://<IP-TAILSCALE>/
           echo ====================================================
@@ -123,10 +120,12 @@ jobs:
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      # 8. Loop
+      # 8. Loop Final
       - name: Maintain Connection
         run: |
+          Write-Host "============================================="
           Write-Host "IP TAILSCALE: $env:TAILSCALE_IP"
           Write-Host "URL WEB:      http://$env:TAILSCALE_IP"
           Write-Host "USER/PASS:    rootkit / Buzon2005!"
+          Write-Host "============================================="
           while ($true) { Start-Sleep -Seconds 300 }
