@@ -18,11 +18,11 @@ jobs:
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
           Restart-Service -Name TermService -Force
 
-      # 2. Instalación de Apps (Chocolatey)
+      # 2. Instalación de Apps (Chocolatey) - MODIFICADO: Python y Git agregados
       - name: Install Apps with Choco
         run: |
           choco feature enable -n allowGlobalConfirmation
-          choco install qbittorrent 7zip motrix -y --no-progress --limit-output
+          choco install qbittorrent 7zip python git -y --no-progress --limit-output
 
       # 3. Crear Usuario Fijo
       - name: Create Fixed User
@@ -40,7 +40,7 @@ jobs:
           Write-Host "Descargando Blip..."
           Invoke-WebRequest -Uri "https://blip.net/download/windows" -OutFile "$dir\BlipSetup.exe"
 
-      # 5. Configurar Auto-CMD
+      # 5. Configurar Auto-CMD - MODIFICADO: Mensaje con Git y Python
       - name: Setup Auto-Launch Command
         run: |
           $scriptContent = @"
@@ -52,7 +52,7 @@ jobs:
           echo ESTADO:
           echo [OK] RDP Activo
           echo [OK] Blip descargado en Downloads
-          echo [OK] Apps: qBittorrent, Motrix, 7Zip
+          echo [OK] Apps: qBittorrent, Python, Git, 7Zip
           echo.
           echo ====================================================
           cd C:\Users\rootkit\Downloads
